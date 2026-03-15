@@ -190,59 +190,66 @@ type zoneRespColo struct {
 	ZoneTag string `json:"zoneTag"`
 }
 
+// httpRequestsGroup is the shared structure for both httpRequests1mGroups (Pro+)
+// and httpRequests1dGroups (free tier). The Sum and Unique fields are identical;
+// only Dimensions differs (datetime vs date) but addHTTPGroups never reads it.
+type httpRequestsGroup struct {
+	Dimensions struct {
+		Datetime string `json:"datetime"`
+		Date     string `json:"date"`
+	} `json:"dimensions"`
+	Unique struct {
+		Uniques uint64 `json:"uniques"`
+	} `json:"uniq"`
+	Sum struct {
+		Bytes          uint64 `json:"bytes"`
+		CachedBytes    uint64 `json:"cachedBytes"`
+		CachedRequests uint64 `json:"cachedRequests"`
+		Requests       uint64 `json:"requests"`
+		BrowserMap     []struct {
+			PageViews       uint64 `json:"pageViews"`
+			UaBrowserFamily string `json:"uaBrowserFamily"`
+		} `json:"browserMap"`
+		ClientHTTPVersion []struct {
+			Protocol string `json:"clientHTTPProtocol"`
+			Requests uint64 `json:"requests"`
+		} `json:"clientHTTPVersionMap"`
+		ClientSSL []struct {
+			Protocol string `json:"clientSSLProtocol"`
+		} `json:"clientSSLMap"`
+		ContentType []struct {
+			Bytes                   uint64 `json:"bytes"`
+			Requests                uint64 `json:"requests"`
+			EdgeResponseContentType string `json:"edgeResponseContentTypeName"`
+		} `json:"contentTypeMap"`
+		Country []struct {
+			Bytes             uint64 `json:"bytes"`
+			ClientCountryName string `json:"clientCountryName"`
+			Requests          uint64 `json:"requests"`
+			Threats           uint64 `json:"threats"`
+		} `json:"countryMap"`
+		EncryptedBytes    uint64 `json:"encryptedBytes"`
+		EncryptedRequests uint64 `json:"encryptedRequests"`
+		IPClass           []struct {
+			Type     string `json:"ipType"`
+			Requests uint64 `json:"requests"`
+		} `json:"ipClassMap"`
+		PageViews      uint64 `json:"pageViews"`
+		ResponseStatus []struct {
+			EdgeResponseStatus int    `json:"edgeResponseStatus"`
+			Requests           uint64 `json:"requests"`
+		} `json:"responseStatusMap"`
+		ThreatPathing []struct {
+			Name     string `json:"threatPathingName"`
+			Requests uint64 `json:"requests"`
+		} `json:"threatPathingMap"`
+		Threats uint64 `json:"threats"`
+	} `json:"sum"`
+}
+
 type zoneResp struct {
-	HTTP1mGroups []struct {
-		Dimensions struct {
-			Datetime string `json:"datetime"`
-		} `json:"dimensions"`
-		Unique struct {
-			Uniques uint64 `json:"uniques"`
-		} `json:"uniq"`
-		Sum struct {
-			Bytes          uint64 `json:"bytes"`
-			CachedBytes    uint64 `json:"cachedBytes"`
-			CachedRequests uint64 `json:"cachedRequests"`
-			Requests       uint64 `json:"requests"`
-			BrowserMap     []struct {
-				PageViews       uint64 `json:"pageViews"`
-				UaBrowserFamily string `json:"uaBrowserFamily"`
-			} `json:"browserMap"`
-			ClientHTTPVersion []struct {
-				Protocol string `json:"clientHTTPProtocol"`
-				Requests uint64 `json:"requests"`
-			} `json:"clientHTTPVersionMap"`
-			ClientSSL []struct {
-				Protocol string `json:"clientSSLProtocol"`
-			} `json:"clientSSLMap"`
-			ContentType []struct {
-				Bytes                   uint64 `json:"bytes"`
-				Requests                uint64 `json:"requests"`
-				EdgeResponseContentType string `json:"edgeResponseContentTypeName"`
-			} `json:"contentTypeMap"`
-			Country []struct {
-				Bytes             uint64 `json:"bytes"`
-				ClientCountryName string `json:"clientCountryName"`
-				Requests          uint64 `json:"requests"`
-				Threats           uint64 `json:"threats"`
-			} `json:"countryMap"`
-			EncryptedBytes    uint64 `json:"encryptedBytes"`
-			EncryptedRequests uint64 `json:"encryptedRequests"`
-			IPClass           []struct {
-				Type     string `json:"ipType"`
-				Requests uint64 `json:"requests"`
-			} `json:"ipClassMap"`
-			PageViews      uint64 `json:"pageViews"`
-			ResponseStatus []struct {
-				EdgeResponseStatus int    `json:"edgeResponseStatus"`
-				Requests           uint64 `json:"requests"`
-			} `json:"responseStatusMap"`
-			ThreatPathing []struct {
-				Name     string `json:"threatPathingName"`
-				Requests uint64 `json:"requests"`
-			} `json:"threatPathingMap"`
-			Threats uint64 `json:"threats"`
-		} `json:"sum"`
-	} `json:"httpRequests1mGroups"`
+	HTTP1mGroups []httpRequestsGroup `json:"httpRequests1mGroups"`
+	HTTP1dGroups []httpRequestsGroup `json:"httpRequests1dGroups"`
 
 	FirewallEventsAdaptiveGroups []struct {
 		Count      uint64 `json:"count"`
@@ -663,6 +670,140 @@ query ($zoneIDs: [String!], $mintime: Time!, $maxtime: Time!, $limit: Int!) {
 	var resp cloudflareResponse
 	if err := gql.Client.Run(ctx, request, &resp); err != nil {
 		log.Errorf("failed to fetch zone totals, err:%v", err)
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+// fetchZoneTotalsFree queries zone analytics without httpRequests1mGroups,
+// which is not available on the Cloudflare free plan. The adaptive and
+// firewall group fields are still available and populate the corresponding
+// Prometheus metrics (status/country/host, firewall events, health checks).
+// fetchZoneTotalsFree queries zone analytics for the Cloudflare free plan.
+// It replaces httpRequests1mGroups (Pro+ only) with httpRequests1dGroups
+// (daily resolution, available on free tier) for aggregate metrics like
+// bandwidth, cache, threats, and country breakdowns. Also queries all
+// adaptive and firewall groups which are available on the free plan.
+func fetchZoneTotalsFree(zoneIDs []string) (*cloudflareResponse, error) {
+	request := graphql.NewRequest(`
+query ($zoneIDs: [String!], $mintime: Time!, $maxtime: Time!, $limit: Int!, $date: Date!) {
+	viewer {
+		zones(filter: { zoneTag_in: $zoneIDs }) {
+			zoneTag
+			httpRequests1dGroups(limit: 1, filter: { date: $date }) {
+				uniq {
+					uniques
+				}
+				sum {
+					browserMap {
+						pageViews
+						uaBrowserFamily
+					}
+					bytes
+					cachedBytes
+					cachedRequests
+					clientHTTPVersionMap {
+						clientHTTPProtocol
+						requests
+					}
+					clientSSLMap {
+						clientSSLProtocol
+					}
+					contentTypeMap {
+						bytes
+						requests
+						edgeResponseContentTypeName
+					}
+					countryMap {
+						bytes
+						clientCountryName
+						requests
+						threats
+					}
+					encryptedBytes
+					encryptedRequests
+					ipClassMap {
+						ipType
+						requests
+					}
+					pageViews
+					requests
+					responseStatusMap {
+						edgeResponseStatus
+						requests
+					}
+					threatPathingMap {
+						requests
+						threatPathingName
+					}
+					threats
+				}
+				dimensions {
+					date
+				}
+			}
+			firewallEventsAdaptiveGroups(limit: $limit, filter: { datetime_geq: $mintime, datetime_lt: $maxtime }) {
+				count
+				dimensions {
+				  action
+				  source
+				  ruleId
+				  clientRequestHTTPHost
+				  clientCountryName
+				}
+			}
+			httpRequestsAdaptiveGroups(limit: $limit, filter: { datetime_geq: $mintime, datetime_lt: $maxtime, cacheStatus_notin: ["hit"] }) {
+				count
+				dimensions {
+					originResponseStatus
+					clientCountryName
+					clientRequestHTTPHost
+				}
+				quantiles {
+					originResponseDurationMsP50
+					originResponseDurationMsP95
+					originResponseDurationMsP99
+				}
+			}
+			httpRequestsEdgeCountryHost: httpRequestsAdaptiveGroups(limit: $limit, filter: { datetime_geq: $mintime, datetime_lt: $maxtime, requestSource_in: ["eyeball"] }) {
+				count
+				dimensions {
+					edgeResponseStatus
+					clientCountryName
+					clientRequestHTTPHost
+				}
+			}
+			healthCheckEventsAdaptiveGroups(limit: $limit, filter: { datetime_geq: $mintime, datetime_lt: $maxtime }) {
+				count
+				dimensions {
+					healthStatus
+					originIP
+					region
+					fqdn
+				}
+			}
+		}
+	}
+}
+`)
+
+	now, now1mAgo := GetTimeRange()
+	request.Var("limit", gqlQueryLimit)
+	request.Var("maxtime", now)
+	request.Var("mintime", now1mAgo)
+	request.Var("zoneIDs", zoneIDs)
+	request.Var("date", now.Format("2006-01-02"))
+
+	gql.Mu.RLock()
+	defer gql.Mu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), cftimeout)
+	defer cancel()
+
+	var resp cloudflareResponse
+	if err := gql.Client.Run(ctx, request, &resp); err != nil {
+		log.Errorf("failed to fetch free-tier zone totals, err:%v", err)
 		return nil, err
 	}
 

@@ -696,10 +696,6 @@ func fetchLogpushAnalyticsForZone(zones []cfzones.Zone, wg *sync.WaitGroup) {
 func fetchZoneColocationAnalytics(zones []cfzones.Zone, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	// Colocation metrics are not available in non-enterprise zones
-	if viper.GetBool("free_tier") {
-		return
-	}
 
 	zoneIDs := extractZoneIDs(zones)
 	if len(zoneIDs) == 0 {
@@ -725,17 +721,18 @@ func fetchZoneColocationAnalytics(zones []cfzones.Zone, wg *sync.WaitGroup) {
 func fetchZoneAnalytics(zones []cfzones.Zone, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	// None of the below referenced metrics are available in the free tier
-	if viper.GetBool("free_tier") {
-		return
-	}
-
 	zoneIDs := extractZoneIDs(zones)
 	if len(zoneIDs) == 0 {
 		return
 	}
 
-	r, err := fetchZoneTotals(zoneIDs)
+	var r *cloudflareResponse
+	var err error
+	if viper.GetBool("free_tier") {
+		r, err = fetchZoneTotalsFree(zoneIDs)
+	} else {
+		r, err = fetchZoneTotals(zoneIDs)
+	}
 	if err != nil {
 		log.Error("failed to fetch zone analytics: ", err)
 		return
@@ -753,8 +750,12 @@ func fetchZoneAnalytics(zones []cfzones.Zone, wg *sync.WaitGroup) {
 }
 
 func addHTTPGroups(z *zoneResp, name string, account string) {
-	// Nothing to do.
-	if len(z.HTTP1mGroups) == 0 {
+	// Use 1m groups (Pro+) if available, otherwise fall back to 1d groups (free tier).
+	groups := z.HTTP1mGroups
+	if len(groups) == 0 {
+		groups = z.HTTP1dGroups
+	}
+	if len(groups) == 0 {
 		return
 	}
 
@@ -777,7 +778,7 @@ func addHTTPGroups(z *zoneResp, name string, account string) {
 	zonePageviewsTotal.DeletePartialMatch(label)
 	zoneUniquesTotal.DeletePartialMatch(label)
 
-	zt := z.HTTP1mGroups[0]
+	zt := groups[0]
 
 	zoneRequestTotal.With(prometheus.Labels{"zone": name, "account": account}).Add(float64(zt.Sum.Requests))
 	zoneRequestCached.With(prometheus.Labels{"zone": name, "account": account}).Add(float64(zt.Sum.CachedRequests))
@@ -943,9 +944,6 @@ func fetchEdgeErrorsByPathAnalytics(zones []cfzones.Zone, wg *sync.WaitGroup) {
 		return
 	}
 
-	if viper.GetBool("free_tier") {
-		return
-	}
 
 	zoneIDs := extractZoneIDs(zones)
 	if len(zoneIDs) == 0 {
@@ -1123,10 +1121,6 @@ func getCloudflareTunnelStatusValue(status string) uint8 {
 func fetchZoneASNAnalytics(zones []cfzones.Zone, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	// ASN metrics are not available in free tier
-	if viper.GetBool("free_tier") {
-		return
-	}
 
 	zoneIDs := extractZoneIDs(zones)
 	if len(zoneIDs) == 0 {
