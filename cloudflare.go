@@ -783,50 +783,6 @@ query ($zoneIDs: [String!], $mintime: Time!, $maxtime: Time!, $limit: Int!, $dat
 	return &resp, nil
 }
 
-// fetchFirewallEventsFree queries firewall events separately for the free tier.
-// This is isolated from the main query so a missing Firewall Services permission
-// does not prevent daily aggregate and edge status metrics from being collected.
-func fetchFirewallEventsFree(zoneIDs []string) (*cloudflareResponse, error) {
-	request := graphql.NewRequest(`
-query ($zoneIDs: [String!], $mintime: Time!, $maxtime: Time!, $limit: Int!) {
-	viewer {
-		zones(filter: { zoneTag_in: $zoneIDs }) {
-			zoneTag
-			firewallEventsAdaptiveGroups(limit: $limit, filter: { datetime_geq: $mintime, datetime_lt: $maxtime }) {
-				count
-				dimensions {
-					action
-					source
-					ruleId
-					clientRequestHTTPHost
-					clientCountryName
-				}
-			}
-		}
-	}
-}
-`)
-
-	now, now1mAgo := GetTimeRange()
-	request.Var("limit", gqlQueryLimit)
-	request.Var("maxtime", now)
-	request.Var("mintime", now1mAgo)
-	request.Var("zoneIDs", zoneIDs)
-
-	gql.Mu.RLock()
-	defer gql.Mu.RUnlock()
-
-	ctx, cancel := context.WithTimeout(context.Background(), cftimeout)
-	defer cancel()
-
-	var resp cloudflareResponse
-	if err := gql.Client.Run(ctx, request, &resp); err != nil {
-		log.Warnf("failed to fetch free-tier firewall events (Zone Firewall Services Read permission may be missing), err:%v", err)
-		return nil, err
-	}
-
-	return &resp, nil
-}
 
 func fetchColoTotals(zoneIDs []string) (*cloudflareResponseColo, error) {
 	request := graphql.NewRequest(`

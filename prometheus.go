@@ -561,6 +561,11 @@ func mustRegisterMetrics(deniedMetrics MetricsSet) {
 func fetchLoadblancerPoolsHealth(account cfaccounts.Account, wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	// Load Balancer is a paid add-on, skip on free tier
+	if viper.GetBool("free_tier") {
+		return
+	}
+
 	pools := fetchLoadblancerPools(account)
 	if pools == nil {
 		return
@@ -750,20 +755,8 @@ func fetchZoneAnalytics(zones []cfzones.Zone, wg *sync.WaitGroup) {
 		addHealthCheckGroups(&z, name, account)
 		addHTTPAdaptiveGroups(&z, name, account)
 	}
+}
 
-	// On free tier, firewall events are queried separately to avoid
-	// a missing permission taking down the entire analytics query.
-	if viper.GetBool("free_tier") {
-		fwResp, fwErr := fetchFirewallEventsFree(zoneIDs)
-		if fwErr == nil && fwResp != nil {
-			for _, z := range fwResp.Viewer.Zones {
-				name, account := findZoneAccountName(zones, z.ZoneTag)
-				z := z
-				addFirewallGroups(&z, name, account)
-			}
-		}
-}
-}
 
 func addHTTPGroups(z *zoneResp, name string, account string) {
 	// Use 1m groups (Pro+) if available, otherwise fall back to 1d groups (free tier).
