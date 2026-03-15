@@ -753,19 +753,6 @@ query ($zoneIDs: [String!], $mintime: Time!, $maxtime: Time!, $limit: Int!, $dat
 				  clientCountryName
 				}
 			}
-			httpRequestsAdaptiveGroups(limit: $limit, filter: { datetime_geq: $mintime, datetime_lt: $maxtime, cacheStatus_notin: ["hit"] }) {
-				count
-				dimensions {
-					originResponseStatus
-					clientCountryName
-					clientRequestHTTPHost
-				}
-				quantiles {
-					originResponseDurationMsP50
-					originResponseDurationMsP95
-					originResponseDurationMsP99
-				}
-			}
 			httpRequestsEdgeCountryHost: httpRequestsAdaptiveGroups(limit: $limit, filter: { datetime_geq: $mintime, datetime_lt: $maxtime, requestSource_in: ["eyeball"] }) {
 				count
 				dimensions {

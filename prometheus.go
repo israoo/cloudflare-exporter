@@ -347,7 +347,7 @@ var (
 		Name: zoneBandwidthASNMetricName.String(),
 		Help: "Bandwidth per ASN (Autonomous System Number) in bytes",
 	}, []string{"zone", "account", "asn", "asn_description"})
-  
+
 	zoneEdgeErrorsByPath = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: zoneEdgeErrorsByPathMetricName.String(),
 		Help: "Number of edge errors (4xx and 5xx) by request path",
@@ -696,6 +696,9 @@ func fetchLogpushAnalyticsForZone(zones []cfzones.Zone, wg *sync.WaitGroup) {
 func fetchZoneColocationAnalytics(zones []cfzones.Zone, wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	if viper.GetBool("free_tier") {
+		return
+	}
 
 	zoneIDs := extractZoneIDs(zones)
 	if len(zoneIDs) == 0 {
@@ -944,6 +947,9 @@ func fetchEdgeErrorsByPathAnalytics(zones []cfzones.Zone, wg *sync.WaitGroup) {
 		return
 	}
 
+	if viper.GetBool("free_tier") {
+		return
+	}
 
 	zoneIDs := extractZoneIDs(zones)
 	if len(zoneIDs) == 0 {
@@ -1121,6 +1127,9 @@ func getCloudflareTunnelStatusValue(status string) uint8 {
 func fetchZoneASNAnalytics(zones []cfzones.Zone, wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	if viper.GetBool("free_tier") {
+		return
+	}
 
 	zoneIDs := extractZoneIDs(zones)
 	if len(zoneIDs) == 0 {
