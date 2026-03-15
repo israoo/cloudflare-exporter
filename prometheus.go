@@ -750,6 +750,19 @@ func fetchZoneAnalytics(zones []cfzones.Zone, wg *sync.WaitGroup) {
 		addHealthCheckGroups(&z, name, account)
 		addHTTPAdaptiveGroups(&z, name, account)
 	}
+
+	// On free tier, firewall events are queried separately to avoid
+	// a missing permission taking down the entire analytics query.
+	if viper.GetBool("free_tier") {
+		fwResp, fwErr := fetchFirewallEventsFree(zoneIDs)
+		if fwErr == nil && fwResp != nil {
+			for _, z := range fwResp.Viewer.Zones {
+				name, account := findZoneAccountName(zones, z.ZoneTag)
+				z := z
+				addFirewallGroups(&z, name, account)
+			}
+		}
+}
 }
 
 func addHTTPGroups(z *zoneResp, name string, account string) {

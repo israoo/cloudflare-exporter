@@ -685,6 +685,11 @@ query ($zoneIDs: [String!], $mintime: Time!, $maxtime: Time!, $limit: Int!) {
 // (daily resolution, available on free tier) for aggregate metrics like
 // bandwidth, cache, threats, and country breakdowns. Also queries all
 // adaptive and firewall groups which are available on the free plan.
+// fetchZoneTotalsFree queries zone analytics for the Cloudflare free plan.
+// It uses httpRequests1dGroups (daily, available on free tier) instead of
+// httpRequests1mGroups (Pro+ only) for aggregate metrics. Adaptive groups
+// for edge status are also included. Firewall and health check groups are
+// queried separately to avoid a single failed field taking down the whole query.
 func fetchZoneTotalsFree(zoneIDs []string) (*cloudflareResponse, error) {
 	request := graphql.NewRequest(`
 query ($zoneIDs: [String!], $mintime: Time!, $maxtime: Time!, $limit: Int!, $date: Date!) {
@@ -743,31 +748,12 @@ query ($zoneIDs: [String!], $mintime: Time!, $maxtime: Time!, $limit: Int!, $dat
 					date
 				}
 			}
-			firewallEventsAdaptiveGroups(limit: $limit, filter: { datetime_geq: $mintime, datetime_lt: $maxtime }) {
-				count
-				dimensions {
-				  action
-				  source
-				  ruleId
-				  clientRequestHTTPHost
-				  clientCountryName
-				}
-			}
 			httpRequestsEdgeCountryHost: httpRequestsAdaptiveGroups(limit: $limit, filter: { datetime_geq: $mintime, datetime_lt: $maxtime, requestSource_in: ["eyeball"] }) {
 				count
 				dimensions {
 					edgeResponseStatus
 					clientCountryName
 					clientRequestHTTPHost
-				}
-			}
-			healthCheckEventsAdaptiveGroups(limit: $limit, filter: { datetime_geq: $mintime, datetime_lt: $maxtime }) {
-				count
-				dimensions {
-					healthStatus
-					originIP
-					region
-					fqdn
 				}
 			}
 		}
@@ -791,6 +777,51 @@ query ($zoneIDs: [String!], $mintime: Time!, $maxtime: Time!, $limit: Int!, $dat
 	var resp cloudflareResponse
 	if err := gql.Client.Run(ctx, request, &resp); err != nil {
 		log.Errorf("failed to fetch free-tier zone totals, err:%v", err)
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+// fetchFirewallEventsFree queries firewall events separately for the free tier.
+// This is isolated from the main query so a missing Firewall Services permission
+// does not prevent daily aggregate and edge status metrics from being collected.
+func fetchFirewallEventsFree(zoneIDs []string) (*cloudflareResponse, error) {
+	request := graphql.NewRequest(`
+query ($zoneIDs: [String!], $mintime: Time!, $maxtime: Time!, $limit: Int!) {
+	viewer {
+		zones(filter: { zoneTag_in: $zoneIDs }) {
+			zoneTag
+			firewallEventsAdaptiveGroups(limit: $limit, filter: { datetime_geq: $mintime, datetime_lt: $maxtime }) {
+				count
+				dimensions {
+					action
+					source
+					ruleId
+					clientRequestHTTPHost
+					clientCountryName
+				}
+			}
+		}
+	}
+}
+`)
+
+	now, now1mAgo := GetTimeRange()
+	request.Var("limit", gqlQueryLimit)
+	request.Var("maxtime", now)
+	request.Var("mintime", now1mAgo)
+	request.Var("zoneIDs", zoneIDs)
+
+	gql.Mu.RLock()
+	defer gql.Mu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), cftimeout)
+	defer cancel()
+
+	var resp cloudflareResponse
+	if err := gql.Client.Run(ctx, request, &resp); err != nil {
+		log.Warnf("failed to fetch free-tier firewall events (Zone Firewall Services Read permission may be missing), err:%v", err)
 		return nil, err
 	}
 
